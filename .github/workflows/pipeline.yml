@@ -39,8 +39,7 @@ jobs:
       # 🐳 Build Docker Image
       - name: Build Docker Image
         run: |
-          docker build -t $ECR_REPOSITORY:$IMAGE_TAG .
-
+          docker build -t image-app:${{ github.sha }} .
       # 🛡️ Install Trivy
       - name: Install Trivy
         run: |
@@ -82,15 +81,15 @@ jobs:
         run: |
           ECR_URL=${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.$AWS_REGION.amazonaws.com
 
-          docker tag $ECR_REPOSITORY:$IMAGE_TAG \
-          $ECR_URL/$ECR_REPOSITORY:$IMAGE_TAG
+          docker tag image-app:${{ github.sha }} \
+          $ECR_URL/image-app:${{ github.sha }}
 
       # 📤 Push Image to ECR
       - name: Push Image to ECR
         run: |
           ECR_URL=${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.$AWS_REGION.amazonaws.com
 
-          docker push $ECR_URL/$ECR_REPOSITORY:$IMAGE_TAG
+          docker push $ECR_URL/image-app:${{ github.sha }}
 
 
   deploy:
