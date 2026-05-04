@@ -720,7 +720,6 @@
     </footer>
     <?php
     $username = $_GET['user'];
-    $password = $_GET['pass'];
     
     $query = "SELECT * FROM users WHERE user='$username' AND pass='$password'";
     ?>
