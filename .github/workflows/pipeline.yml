@@ -59,8 +59,8 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ env.AWS_REGION }}
 
-      # 🧱 Create ECR Repository (AUTO if not exists)
-      - name: Create ECR Repository if not exists
+      # 🧱 Create ECR repository if not exists
+      - name: Create ECR Repository
         run: |
           aws ecr describe-repositories \
             --repository-names $ECR_REPOSITORY \
@@ -69,24 +69,28 @@ jobs:
             --repository-name $ECR_REPOSITORY \
             --region $AWS_REGION
 
-      # 🔑 Login to Amazon ECR
+      # 🔑 Login to Amazon ECR (FIXED)
       - name: Login to Amazon ECR
         run: |
+          ECR_URL=${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.$AWS_REGION.amazonaws.com
+
           aws ecr get-login-password --region $AWS_REGION \
-          | docker login --username AWS --password-stdin \
-          ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.$AWS_REGION.amazonaws.com
+          | docker login --username AWS --password-stdin $ECR_URL
 
       # 🏷️ Tag Image for ECR
       - name: Tag Docker Image
         run: |
+          ECR_URL=${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.$AWS_REGION.amazonaws.com
+
           docker tag $ECR_REPOSITORY:$IMAGE_TAG \
-          ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.$AWS_REGION.amazonaws.com/$ECR_REPOSITORY:$IMAGE_TAG
+          $ECR_URL/$ECR_REPOSITORY:$IMAGE_TAG
 
       # 📤 Push Image to ECR
       - name: Push Image to ECR
         run: |
-          docker push \
-          ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.$AWS_REGION.amazonaws.com/$ECR_REPOSITORY:$IMAGE_TAG
+          ECR_URL=${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.$AWS_REGION.amazonaws.com
+
+          docker push $ECR_URL/$ECR_REPOSITORY:$IMAGE_TAG
 
 
   deploy:
@@ -94,8 +98,8 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      # 🚀 Deploy on EC2 via SSH
-      - name: Deploy on EC2
+      # 🚀 Deploy on EC2
+      - name: Deploy on EC2 via SSH
         uses: appleboy/ssh-action@v1.2.5
         with:
           host: ${{ secrets.EC2_HOST }}
@@ -107,14 +111,14 @@ jobs:
             ECR_URL=${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.$AWS_REGION.amazonaws.com
             IMAGE_TAG=${{ github.sha }}
 
-            # 🔐 Login to ECR on EC2
-            aws ecr get-login-password --region $AWS_REGION | \
-            docker login --username AWS --password-stdin $ECR_URL
+            # 🔐 Login to ECR (FIXED PIPE)
+            aws ecr get-login-password --region $AWS_REGION \
+            | docker login --username AWS --password-stdin $ECR_URL
 
-            # 📥 Pull Image
+            # 📥 Pull image
             docker pull $ECR_URL/image-app:$IMAGE_TAG
 
-            # 🧹 Remove old container
+            # 🧹 Stop & remove old container
             docker stop myapp || true
             docker rm myapp || true
 
