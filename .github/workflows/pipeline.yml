@@ -1,0 +1,126 @@
+name: DevSecOps CI/CD Pipeline
+
+on:
+  push:
+    branches: ["main"]
+
+env:
+  AWS_REGION: ap-south-1
+  ECR_REPOSITORY: image-app
+  IMAGE_TAG: ${{ github.sha }}
+
+jobs:
+  build-scan-push:
+    runs-on: ubuntu-latest
+
+    steps:
+      # 📥 Checkout Code
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      # ☕ Setup Java (SonarQube requirement)
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      # 🔍 SonarQube Scan (SAST)
+      - name: SonarQube Scan
+        uses: sonarsource/sonarqube-scan-action@v2
+        with:
+          args: >
+            -Dsonar.projectKey=image-app
+            -Dsonar.sources=.
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
+
+      # 🐳 Build Docker Image
+      - name: Build Docker Image
+        run: |
+          docker build -t $ECR_REPOSITORY:$IMAGE_TAG .
+
+      # 🛡️ Install Trivy
+      - name: Install Trivy
+        run: |
+          curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sudo sh -s -- -b /usr/local/bin
+
+      # 🔐 Trivy Scan
+      - name: Trivy Image Scan
+        run: |
+          trivy image --severity HIGH,CRITICAL $ECR_REPOSITORY:$IMAGE_TAG
+
+      # 🔐 Configure AWS Credentials
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      # 🧱 Create ECR Repository (AUTO if not exists)
+      - name: Create ECR Repository if not exists
+        run: |
+          aws ecr describe-repositories \
+            --repository-names $ECR_REPOSITORY \
+            --region $AWS_REGION || \
+          aws ecr create-repository \
+            --repository-name $ECR_REPOSITORY \
+            --region $AWS_REGION
+
+      # 🔑 Login to Amazon ECR
+      - name: Login to Amazon ECR
+        run: |
+          aws ecr get-login-password --region $AWS_REGION \
+          | docker login --username AWS --password-stdin \
+          ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.$AWS_REGION.amazonaws.com
+
+      # 🏷️ Tag Image for ECR
+      - name: Tag Docker Image
+        run: |
+          docker tag $ECR_REPOSITORY:$IMAGE_TAG \
+          ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.$AWS_REGION.amazonaws.com/$ECR_REPOSITORY:$IMAGE_TAG
+
+      # 📤 Push Image to ECR
+      - name: Push Image to ECR
+        run: |
+          docker push \
+          ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.$AWS_REGION.amazonaws.com/$ECR_REPOSITORY:$IMAGE_TAG
+
+
+  deploy:
+    needs: build-scan-push
+    runs-on: ubuntu-latest
+
+    steps:
+      # 🚀 Deploy on EC2 via SSH
+      - name: Deploy on EC2
+        uses: appleboy/ssh-action@v1.2.5
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ubuntu
+          key: ${{ secrets.EC2_KEY }}
+          script: |
+
+            AWS_REGION=ap-south-1
+            ECR_URL=${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.$AWS_REGION.amazonaws.com
+            IMAGE_TAG=${{ github.sha }}
+
+            # 🔐 Login to ECR on EC2
+            aws ecr get-login-password --region $AWS_REGION | \
+            docker login --username AWS --password-stdin $ECR_URL
+
+            # 📥 Pull Image
+            docker pull $ECR_URL/image-app:$IMAGE_TAG
+
+            # 🧹 Remove old container
+            docker stop myapp || true
+            docker rm myapp || true
+
+            # 🚀 Run new container
+            docker run -d -p 80:80 --name myapp \
+            $ECR_URL/image-app:$IMAGE_TAG
+
+            # 🧽 Cleanup unused images
+            docker image prune -f
