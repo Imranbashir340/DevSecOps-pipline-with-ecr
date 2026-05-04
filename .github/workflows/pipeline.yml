@@ -22,24 +22,28 @@ jobs:
       - name: Setup Java
         uses: actions/setup-java@v4
         with:
-          distribution: 'temurin'
+          distribution: temurin
           java-version: '17'
 
       # 🔍 SonarQube Scan (SAST)
       - name: SonarQube Scan
         uses: sonarsource/sonarqube-scan-action@v2
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
         with:
           args: >
             -Dsonar.projectKey=image-app
             -Dsonar.sources=.
-        env:
-          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
-          SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
 
       # 🐳 Build Docker Image
       - name: Build Docker Image
         run: |
           docker build -t image-app:${{ github.sha }} .
+
+      - name: Check Docker Images
+        run: docker images
+
       # 🛡️ Install Trivy
       - name: Install Trivy
         run: |
@@ -48,7 +52,7 @@ jobs:
       # 🔐 Trivy Scan
       - name: Trivy Image Scan
         run: |
-          trivy image --severity HIGH,CRITICAL $ECR_REPOSITORY:$IMAGE_TAG
+          trivy image --severity HIGH,CRITICAL image-app:${{ github.sha }}
 
       # 🔐 Configure AWS Credentials
       - name: Configure AWS Credentials
@@ -58,7 +62,7 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ env.AWS_REGION }}
 
-      # 🧱 Create ECR repository if not exists
+      # 🧱 Create ECR Repository
       - name: Create ECR Repository
         run: |
           aws ecr describe-repositories \
@@ -71,23 +75,36 @@ jobs:
       # 🔑 Login to Amazon ECR (FIXED)
       - name: Login to Amazon ECR
         run: |
-          ECR_URL=${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.$AWS_REGION.amazonaws.com
+          set -e
 
-          aws ecr get-login-password --region $AWS_REGION \
+          ACCOUNT_ID=${{ secrets.AWS_ACCOUNT_ID }}
+          REGION=$AWS_REGION
+
+          ECR_URL="$ACCOUNT_ID.dkr.ecr.$REGION.amazonaws.com"
+
+          aws sts get-caller-identity
+
+          aws ecr get-login-password --region $REGION \
           | docker login --username AWS --password-stdin $ECR_URL
 
-      # 🏷️ Tag Image for ECR
+      # 🏷️ Tag Image
       - name: Tag Docker Image
         run: |
-          ECR_URL=${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.$AWS_REGION.amazonaws.com
+          ACCOUNT_ID=${{ secrets.AWS_ACCOUNT_ID }}
+          REGION=$AWS_REGION
+
+          ECR_URL="$ACCOUNT_ID.dkr.ecr.$REGION.amazonaws.com"
 
           docker tag image-app:${{ github.sha }} \
           $ECR_URL/image-app:${{ github.sha }}
 
-      # 📤 Push Image to ECR
+      # 📤 Push Image
       - name: Push Image to ECR
         run: |
-          ECR_URL=${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.$AWS_REGION.amazonaws.com
+          ACCOUNT_ID=${{ secrets.AWS_ACCOUNT_ID }}
+          REGION=$AWS_REGION
+
+          ECR_URL="$ACCOUNT_ID.dkr.ecr.$REGION.amazonaws.com"
 
           docker push $ECR_URL/image-app:${{ github.sha }}
 
@@ -106,24 +123,31 @@ jobs:
           key: ${{ secrets.EC2_KEY }}
           script: |
 
+            set -e
+
             AWS_REGION=ap-south-1
-            ECR_URL=${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.$AWS_REGION.amazonaws.com
+            ACCOUNT_ID=${{ secrets.AWS_ACCOUNT_ID }}
             IMAGE_TAG=${{ github.sha }}
 
-            # 🔐 Login to ECR (FIXED PIPE)
+            ECR_URL="$ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com"
+
+            echo "Checking AWS identity..."
+            aws sts get-caller-identity
+
+            echo "Logging into ECR..."
             aws ecr get-login-password --region $AWS_REGION \
             | docker login --username AWS --password-stdin $ECR_URL
 
-            # 📥 Pull image
+            echo "Pulling image..."
             docker pull $ECR_URL/image-app:$IMAGE_TAG
 
-            # 🧹 Stop & remove old container
+            echo "Stopping old container..."
             docker stop myapp || true
             docker rm myapp || true
 
-            # 🚀 Run new container
+            echo "Running new container..."
             docker run -d -p 80:80 --name myapp \
             $ECR_URL/image-app:$IMAGE_TAG
 
-            # 🧽 Cleanup unused images
+            echo "Cleaning up..."
             docker image prune -f
